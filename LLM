@@ -1,0 +1,100 @@
+from transformers import T5Tokenizer, T5ForConditionalGeneration, pipeline
+from langchain.llms import HuggingFacePipeline
+from langchain import LLMChain, PromptTemplate
+from langchain.agents import initialize_agent, Tool
+from langchain.chains.conversation.memory import ConversationBufferMemory
+from langchain import PromptTemplate
+from wandb_addons.prompts import Trace
+# from wandb.integration.langchain import WandbTracer
+import wandb
+import datetime
+​
+wandb.init(
+    # set the wandb project where this run will be logged
+    project="shobit_LLM",
+)
+​
+# wandb_config = {"project": "shash36_LLM_19_07_23"}
+​
+def fib(n):
+    if n <= 1:
+        return n
+    else:
+        return (fib(n-1) + fib(n-2))
+​
+memory = ConversationBufferMemory(memory_key="chat_history")
+​
+tools = Tool(
+            name='Fibonacci', func = lambda n: str(fib(int(n))), description="use when you want to calculate the nth fibonacci number"
+            )
+​
+​
+​
+model_id = "flan-t5-base"
+tokenizer = T5Tokenizer.from_pretrained(model_id)
+model = T5ForConditionalGeneration.from_pretrained(model_id)
+​
+pipe = pipeline(
+    "text2text-generation",
+    model=model, tokenizer=tokenizer, max_length=512
+)
+​
+local_llm = HuggingFacePipeline(pipeline=pipe)
+​
+# query = "what's the capital of France?"
+# query = "What is verizon?"
+# query = "What's the fibonacci of 3?"
+​
+queries_ls = [
+  "What is the capital of France?",
+  "How do I boil an egg?",
+  "What to do if the aliens arrive?",
+  "How do I boil an egg?"*1000
+]
+​
+for query in queries_ls: 
+    
+    try:
+        template = """\
+        Answer the following query: {query}?
+        """
+        prompt = PromptTemplate.from_template(template)
+        prompt.format(query=query)
+​
+        start_time_ms = datetime.datetime.now().timestamp() * 1000
+        llm_chain = LLMChain(prompt = prompt,
+                            llm=local_llm, verbose=True)
+        
+        if len(query)>1000:
+            raise ValueError("Cannot proceed")
+        else:
+            response_text = llm_chain.run(query)
+            end_time_ms = round(datetime.datetime.now().timestamp() * 1000)  # logged in milliseconds
+            status="success"
+            status_message=None
+    
+    except ValueError as e:
+        end_time_ms = round(datetime.datetime.now().timestamp() * 1000)  # logged in milliseconds
+        status="error"
+        status_message=str(e)
+        response_text = ""
+    
+    # create a span in wandb
+    root_span = Trace(
+          name="root_span",
+          kind="chain",  # kind can be "llm", "chain", "agent" or "tool"
+          status_code=status,
+          status_message=status_message,
+          start_time_ms=start_time_ms,
+          end_time_ms=end_time_ms,
+          inputs={"system_prompt": template, "query": query},
+          outputs={"response": response_text},
+          )
+    
+    # log the span to wandb
+    root_span.log(name="openai_trace")
+​
+# agent= initialize_agent([tools], local_llm, agent="chat-zero-shot-react-description", verbose=True)
+# agent= initialize_agent([tools], local_llm, agent="conversational-react-description", memory=memory, verbose=True)
+# agent.run("What's the fibonacci of 3?")
+# agent.run("hi")
